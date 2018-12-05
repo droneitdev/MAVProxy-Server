@@ -9,7 +9,7 @@ Released under the GNU GPL version 3 or later
 
 import sys, os, time, socket, signal
 import fnmatch, errno, threading
-import serial, select
+import serial, Queue, select
 import traceback
 import select
 import shlex
@@ -31,6 +31,8 @@ from MAVProxy.modules.lib import mp_module
 from MAVProxy.modules.lib import dumpstacks
 from MAVProxy.modules.lib import mp_substitute
 from MAVProxy.modules.lib import multiproc
+from MAVProxy.modules.lib import udp
+from MAVProxy.modules.lib import tcp
 
 # adding all this allows pyinstaller to build a working windows executable
 # note that using --hidden-import does not work for these modules
@@ -130,7 +132,10 @@ class MAVFunctions(object):
 class MPState(object):
     '''holds state of mavproxy'''
     def __init__(self):
-        self.console = textconsole.SimpleConsole()
+	self.udp = udp.UdpServer()
+	self.tcp = tcp.TcpServer()
+        self.console = textconsole.SimpleConsole(udp = self.udp, tcp = self.tcp)
+#        self.console = textconsole.SimpleConsole()
         self.map = None
         self.map_functions = {}
         self.vehicle_type = None
@@ -897,7 +902,14 @@ def input_loop():
     while mpstate.status.exit != True:
         try:
             if mpstate.status.exit != True:
-                line = input(mpstate.rl.prompt)
+		 if mpstate.udp.bound():
+                    line = mpstate.udp.readln()
+           	    mpstate.udp.writeln(line)
+		 elif mpstate.tcp.connected():
+                    line = mpstate.tcp.readln()
+           	    mpstate.tcp.writeln(line)
+		 else:
+           	    line = input(mpstate.rl.prompt)
         except EOFError:
             mpstate.status.exit = True
             sys.exit(1)
@@ -962,6 +974,8 @@ if __name__ == '__main__':
     parser.add_option("--master", dest="master", action='append',
                       metavar="DEVICE[,BAUD]", help="MAVLink master port and optional baud rate",
                       default=[])
+    parser.add_option("--udp", dest="udp", action='append', help="run udp server")
+    parser.add_option("--tcp", dest="tcp", action='append', help="run tcp server")
     parser.add_option("", "--force-connected", dest="force_connected", help="Use master even if initial connection fails",
                       action='store_true', default=False)
     parser.add_option("--out", dest="output", action='append',
@@ -1059,6 +1073,13 @@ if __name__ == '__main__':
     mpstate.logqueue = Queue.Queue()
     mpstate.logqueue_raw = Queue.Queue()
 
+    if opts.udp:
+	mpstate.udp.connect(opts.udp[0].split(":")[0], int(opts.udp[0].split(":")[1]))
+	print("Connected (UDP) to " + mpstate.udp.address + ":" + str(mpstate.udp.port))
+
+    if opts.tcp:
+	mpstate.tcp.connect(opts.tcp[0].split(":")[0], int(opts.tcp[0].split(":")[1]))
+	print("Client (TCP) connected at " + mpstate.tcp.client[0] + ":" + str(mpstate.tcp.port))
 
     if opts.speech:
         # start the speech-dispatcher early, so it doesn't inherit any ports from

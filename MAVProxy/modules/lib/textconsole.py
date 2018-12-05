@@ -9,7 +9,9 @@ class SimpleConsole():
     '''
     a message console for MAVProxy
     '''
-    def __init__(self):
+    def __init__(self, udp, tcp):
+	self.udp = udp
+	self.tcp = tcp
         pass
 
     def write(self, text, fg='black', bg='white'):
@@ -19,6 +21,10 @@ class SimpleConsole():
         else:
             sys.stdout.write(str(text))
         sys.stdout.flush()
+	if self.udp.connected():
+            self.udp.writeln(text)
+	if self.tcp.connected():
+	    self.tcp.writeln(text)
 
     def writeln(self, text, fg='black', bg='white'):
         '''write to the console with linefeed'''
