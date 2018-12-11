@@ -14,7 +14,7 @@ if mp_util.has_wxpython:
 class RallyModule(mp_module.MPModule):
     def __init__(self, mpstate):
         super(RallyModule, self).__init__(mpstate, "rally", "rally point control", public = True)
-        self.rallyloader = mavwp.MAVRallyLoader(self.settings.target_system, self.settings.target_component)
+        self.rallyloader_by_sysid = {}
         self.add_command('rally', self.cmd_rally, "rally point control", ["<add|clear|land|list|move|remove|>",
                                     "<load|save> (FILENAME)"])
         self.have_list = False
@@ -41,6 +41,13 @@ class RallyModule(mp_module.MPModule):
                                                     handler=MPMenuCallTextDialog(title='Rally Altitude (m)',
                                                                                  default=100))])
 
+    @property
+    def rallyloader(self):
+        '''rally loader by system ID'''
+        if not self.target_system in self.rallyloader_by_sysid:
+            self.rallyloader_by_sysid[self.target_system] = mavwp.MAVRallyLoader(self.settings.target_system,
+                                                                                 self.settings.target_component)
+        return self.rallyloader_by_sysid[self.target_system]
 
     def idle_task(self):
         '''called on idle'''
@@ -313,7 +320,10 @@ class RallyModule(mp_module.MPModule):
             self.console.writeln("lat=%f lng=%f alt=%f break_alt=%f land_dir=%f autoland=%f" % (p.lat * 1e-7, p.lng * 1e-7, p.alt, p.break_alt, p.land_dir, int(p.flags & 2!=0) ))
 
         if self.logdir is not None:
-            ral_file_path = os.path.join(self.logdir, 'ral.txt')
+            fname = 'ral.txt'
+            if self.target_system > 1:
+                fname = 'ral_%u.txt' % self.target_system
+            ral_file_path = os.path.join(self.logdir, fname)
             self.rallyloader.save(ral_file_path)
             print("Saved rally points to %s" % ral_file_path)
 

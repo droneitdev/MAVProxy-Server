@@ -17,7 +17,7 @@ from MAVProxy.modules.lib.mp_menu import *
 
 class ConsoleModule(mp_module.MPModule):
     def __init__(self, mpstate):
-        super(ConsoleModule, self).__init__(mpstate, "console", "GUI console", public=True)
+        super(ConsoleModule, self).__init__(mpstate, "console", "GUI console", public=True, multi_vehicle=True)
         self.in_air = False
         self.start_time = 0.0
         self.total_time = 0.0
@@ -28,6 +28,7 @@ class ConsoleModule(mp_module.MPModule):
 
         # setup some default status information
         mpstate.console.set_status('Mode', 'UNKNOWN', row=0, fg='blue')
+        mpstate.console.set_status('SysID', '', row=0, fg='blue')
         mpstate.console.set_status('ARM', 'ARM', fg='grey', row=0)
         mpstate.console.set_status('GPS', 'GPS: --', fg='red', row=0)
         mpstate.console.set_status('Vcc', 'Vcc: --', fg='red', row=0)
@@ -58,12 +59,19 @@ class ConsoleModule(mp_module.MPModule):
 
         mpstate.console.ElevationMap = mp_elevation.ElevationModel()
 
+        self.vehicle_list = []
+        self.vehicle_menu = None
+        self.vehicle_name_by_sysid = {}
+        self.last_param_sysid_timestamp = None
+
         # create the main menu
         if mp_util.has_wxpython:
             self.menu = MPMenuTop([])
             self.add_menu(MPMenuSubMenu('MAVProxy',
                                         items=[MPMenuItem('Settings', 'Settings', 'menuSettings'),
                                                MPMenuItem('Map', 'Load Map', '# module load map')]))
+            self.vehicle_menu = MPMenuSubMenu('Vehicle', items=[])
+            self.add_menu(self.vehicle_menu)
 
     def add_menu(self, menu):
         '''add a new menu'''
@@ -117,7 +125,51 @@ class ConsoleModule(mp_module.MPModule):
                     break
         return distance / speed
 
+    def vehicle_type_string(self, hb):
+        '''return vehicle type string from a heartbeat'''
+        if hb.type == mavutil.mavlink.MAV_TYPE_FIXED_WING:
+            return 'Plane'
+        if hb.type == mavutil.mavlink.MAV_TYPE_GROUND_ROVER:
+            return 'Rover'
+        if hb.type == mavutil.mavlink.MAV_TYPE_SURFACE_BOAT:
+            return 'Boat'
+        if hb.type == mavutil.mavlink.MAV_TYPE_SUBMARINE:
+            return 'Sub'
+        if hb.type in [mavutil.mavlink.MAV_TYPE_QUADROTOR,
+                           mavutil.mavlink.MAV_TYPE_COAXIAL,
+                           mavutil.mavlink.MAV_TYPE_HEXAROTOR,
+                           mavutil.mavlink.MAV_TYPE_OCTOROTOR,
+                           mavutil.mavlink.MAV_TYPE_TRICOPTER,
+                           mavutil.mavlink.MAV_TYPE_DODECAROTOR]:
+            return "Copter"
+        if hb.type == mavutil.mavlink.MAV_TYPE_HELICOPTER:
+            return "Heli"
+        if hb.type == mavutil.mavlink.MAV_TYPE_ANTENNA_TRACKER:
+            return "Tracker"
+        return "UNKNOWN(%u) % hb.type"
 
+    def update_vehicle_menu(self):
+        '''update menu for new vehicles'''
+        self.vehicle_menu.items = []
+        for s in sorted(self.vehicle_list):
+            clist = self.module('param').get_component_id_list(s)
+            if len(clist) == 1:
+                name = 'SysID %u: %s' % (s, self.vehicle_name_by_sysid[s])
+                self.vehicle_menu.items.append(MPMenuItem(name, name, '# set target_system %u' % s))
+            else:
+                for c in sorted(clist):
+                    name = 'SysID %u[%u]: %s' % (s, c, self.vehicle_name_by_sysid[s])
+                    self.vehicle_menu.items.append(MPMenuItem(name, name, '# set target_system %u; set target_component %u' % (s,c)))
+        self.mpstate.console.set_menu(self.menu, self.menu_callback)
+    
+    def add_new_vehicle(self, hb):
+        '''add a new vehicle'''
+        if hb.type == mavutil.mavlink.MAV_TYPE_GCS:
+            return
+        sysid = hb.get_srcSystem()
+        self.vehicle_list.append(sysid)
+        self.vehicle_name_by_sysid[sysid] = self.vehicle_type_string(hb)
+        self.update_vehicle_menu()
 
     def mavlink_packet(self, msg):
         '''handle an incoming mavlink packet'''
@@ -127,6 +179,29 @@ class ConsoleModule(mp_module.MPModule):
             self.mpstate.console = textconsole.SimpleConsole()
             return
         type = msg.get_type()
+
+        if type == 'HEARTBEAT':
+            sysid = msg.get_srcSystem()
+            if not sysid in self.vehicle_list:
+                self.add_new_vehicle(msg)
+
+        if self.last_param_sysid_timestamp != self.module('param').new_sysid_timestamp:
+            '''a new component ID has appeared for parameters'''
+            self.last_param_sysid_timestamp = self.module('param').new_sysid_timestamp
+            self.update_vehicle_menu()
+
+        if type in ['RADIO', 'RADIO_STATUS']:
+            # handle RADIO msgs from all vehicles
+            if msg.rssi < msg.noise+10 or msg.remrssi < msg.remnoise+10:
+                fg = 'red'
+            else:
+                fg = 'black'
+            self.console.set_status('Radio', 'Radio %u/%u %u/%u' % (msg.rssi, msg.noise, msg.remrssi, msg.remnoise), fg=fg)
+            
+        if not self.is_primary_vehicle(msg):
+            # don't process msgs from other than primary vehicle, other than
+            # updating vehicle list
+            return
 
         master = self.master
         # add some status fields
@@ -297,17 +372,13 @@ class ConsoleModule(mp_module.MPModule):
                 status += 'O2'
             self.console.set_status('PWR', status, fg=fg)
             self.console.set_status('Srv', 'Srv %.2f' % (msg.Vservo*0.001), fg='green')
-        elif type in ['RADIO', 'RADIO_STATUS']:
-            if msg.rssi < msg.noise+10 or msg.remrssi < msg.remnoise+10:
-                fg = 'red'
-            else:
-                fg = 'black'
-            self.console.set_status('Radio', 'Radio %u/%u %u/%u' % (msg.rssi, msg.noise, msg.remrssi, msg.remnoise), fg=fg)
         elif type == 'HEARTBEAT':
             fmode = master.flightmode
             if self.settings.vehicle_name:
                 fmode = self.settings.vehicle_name + ':' + fmode
             self.console.set_status('Mode', '%s' % fmode, fg='blue')
+            if len(self.vehicle_list) > 1:
+                self.console.set_status('SysID', 'Sys:%u' % msg.get_srcSystem(), fg='blue')
             if self.master.motors_armed():
                 arm_colour = 'green'
             else:

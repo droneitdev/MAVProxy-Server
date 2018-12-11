@@ -15,7 +15,7 @@ class WPModule(mp_module.MPModule):
         self.wp_requested = {}
         self.wp_received = {}
         self.wp_save_filename = None
-        self.wploader = mavwp.MAVWPLoader()
+        self.wploader_by_sysid = {}
         self.loading_waypoints = False
         self.loading_waypoint_lasttime = time.time()
         self.last_waypoint = 0
@@ -56,6 +56,12 @@ class WPModule(mp_module.MPModule):
                                          MPMenuItem('Loop', 'Loop', '# wp loop'),
                                          MPMenuItem('Add NoFly', 'Loop', '# wp noflyadd')])
 
+    @property
+    def wploader(self):
+        '''per-sysid wploader'''
+        if self.target_system not in self.wploader_by_sysid:
+            self.wploader_by_sysid[self.target_system] = mavwp.MAVWPLoader()
+        return self.wploader_by_sysid[self.target_system]
 
     def missing_wps_to_request(self):
         ret = []
@@ -126,7 +132,10 @@ class WPModule(mp_module.MPModule):
                         w.param1, w.param2, w.param3, w.param4,
                         w.current, w.autocontinue))
                 if self.logdir is not None:
-                    waytxt = os.path.join(self.logdir, 'way.txt')
+                    fname = 'way.txt'
+                    if m.get_srcSystem() != 1:
+                        fname = 'way_%u.txt' % m.get_srcSystem()
+                    waytxt = os.path.join(self.logdir, fname)
                     self.save_waypoints(waytxt)
                     print("Saved waypoints to %s" % waytxt)
                 self.loading_waypoints = False
