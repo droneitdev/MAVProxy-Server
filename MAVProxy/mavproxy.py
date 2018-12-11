@@ -914,14 +914,14 @@ def input_loop():
     while mpstate.status.exit != True:
         try:
             if mpstate.status.exit != True:
-		 if mpstate.udp.bound():
+           	    if mpstate.udp.bound():
                     line = mpstate.udp.readln()
-           	    mpstate.udp.writeln(line)
-		 elif mpstate.tcp.connected():
-                    line = mpstate.tcp.readln()
-           	    mpstate.tcp.writeln(line)
-		 else:
-           	    line = input(mpstate.rl.prompt)
+           	        mpstate.udp.writeln(line)
+           	    elif mpstate.tcp.connected():
+           	        line = mpstate.tcp.readln()
+           	        mpstate.tcp.writeln(line)
+           	    else:
+           	        line = input(mpstate.rl.prompt)
         except EOFError:
             mpstate.status.exit = True
             sys.exit(1)
